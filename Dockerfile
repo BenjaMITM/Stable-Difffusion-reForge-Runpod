@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     python3.12 \
     python3.12-dev \
-    python3.12-distutils \
     python3.12-venv \
     curl \
     && rm -rf /var/lib/apt/lists/*
