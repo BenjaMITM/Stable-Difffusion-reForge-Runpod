@@ -24,7 +24,7 @@ RUN python3.12 -m ensurepip && \
 WORKDIR /app
 
 # Step 5: Clone SD WebUI ReForge 
-RUN git clone --depth=1 https://github.com/nschloe/stable-diffusion-webui-reforge.git .
+RUN git clone --depth=1 https://github.com/Panchovix/stable-diffusion-webui-reForge.git .
 
 # Step 6: Install Python dependencies with pip (Python 3.12)
 RUN python3.12 -m pip install -r requirements.txt
