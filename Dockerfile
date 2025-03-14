@@ -5,36 +5,28 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
+    software-properties-common git wget curl \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    wget \
-    python3.12 \
-    python3.12-dev \
-    python3.12-venv \
-    curl \
+    python3.12 python3.12-dev python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 3: Install pip for Python 3.12 and upgrade it
+# Step 3: Install pip & upgrade it for Python3.12
 RUN python3.12 -m ensurepip && \
     python3.12 -m pip install --upgrade pip
 
-# Step 4: Create a working directory 
-WORKDIR /app
+# Step 4: Copy our entrypoint script into the container
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Step 5: Clone SD WebUI ReForge 
-RUN git clone --depth=1 https://github.com/Panchovix/stable-diffusion-webui-reForge.git .
+# Step 5: Set /workspace as the working directory
+WORKDIR /workspace
 
-# Step 6: Install Python dependencies with pip (Python 3.12)
-RUN python3.12 -m pip install -r requirements.txt
-
-# Step 7: Expose the Web UI Port
+# Step 6: Expose the Web UI Port
 EXPOSE 7860
 
-# Step 8: Set ENV Variables
-ENV COMMANDLINE_ARGS="--listen --port 7860"
+# Step 7: Set ENV Variables
 ENV PYTHONUNBUFFERED=1
 
-# Step 9: Final command to run the WebUI
-CMD ["python3.12", "webui.py"]
+# Step 8: Run entrypoint script
+ENTRYPOINT ["/entrypoint.sh"]
