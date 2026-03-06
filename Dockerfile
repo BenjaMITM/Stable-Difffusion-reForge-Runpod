@@ -37,8 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python${PYTHON_VERSION} -m ensurepip --upgrade && \
-    python${PYTHON_VERSION} -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
 
 RUN ln -sf "/usr/bin/python${PYTHON_VERSION}" /usr/local/bin/python3 && \
     ln -sf "/usr/bin/python${PYTHON_VERSION}" /usr/local/bin/python
@@ -46,9 +45,14 @@ RUN ln -sf "/usr/bin/python${PYTHON_VERSION}" /usr/local/bin/python3 && \
 RUN python${PYTHON_VERSION} -m venv "${REFORGE_VENV}" && \
     python${PYTHON_VERSION} -m venv "${JUPYTER_VENV}"
 
-RUN groupadd --gid "${APP_GID}" "${APP_USER}" && \
-    useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /bin/bash "${APP_USER}" && \
-    mkdir -p /workspace && \
+RUN set -eux; \
+    if ! getent group "${APP_GID}" >/dev/null; then \
+    groupadd --gid "${APP_GID}" "${APP_USER}"; \
+    fi; \
+    if ! id -u "${APP_USER}" >/dev/null 2>&1 && ! getent passwd "${APP_UID}" >/dev/null; then \
+    useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /bin/bash "${APP_USER}"; \
+    fi; \
+    mkdir -p /workspace; \
     chown -R "${APP_UID}:${APP_GID}" /workspace /opt/venv
 
 WORKDIR /workspace
@@ -79,14 +83,21 @@ umask 002
 
 APP_USER="${APP_USER:-runpod}"
 APP_UID="${APP_UID:-1000}"
+APP_GID="${APP_GID:-1000}"
 
 # Some runtimes force UID 0 at startup. Re-exec as app user so webui.sh doesn't abort.
 if [ "$(id -u)" -eq 0 ] && [ "${1:-}" != "--as-user" ]; then
-    if ! id -u "${APP_USER}" >/dev/null 2>&1; then
-        useradd --uid "${APP_UID}" --create-home --shell /bin/bash "${APP_USER}" || true
+    if ! id -u "${APP_USER}" >/dev/null 2>&1 && ! getent passwd "${APP_UID}" >/dev/null; then
+        if ! getent group "${APP_GID}" >/dev/null; then
+            groupadd --gid "${APP_GID}" "${APP_USER}" || true
+        fi
+        useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /bin/bash "${APP_USER}" || true
     fi
-    chown -R "${APP_USER}:${APP_USER}" /workspace /opt/venv
-    exec sudo -E -H -u "${APP_USER}" /start.sh --as-user
+    chown -R "${APP_UID}:${APP_GID}" /workspace /opt/venv
+    if id -u "${APP_USER}" >/dev/null 2>&1; then
+        exec sudo -E -H -u "${APP_USER}" /start.sh --as-user
+    fi
+    exec sudo -E -H -u "#${APP_UID}" /start.sh --as-user
 fi
 
 echo "Starting ReForge setup"
