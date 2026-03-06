@@ -1,135 +1,120 @@
-# Step 1: Official CUDA 12.4.1 base
-FROM --platform=linux/amd64 nvidia/cuda:12.4.1-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:13.0.0-runtime-ubuntu24.04
 
 ARG PYTHON_VERSION=3.12
-ARG PYTORCH_VERSION=2.10.0
 ARG REFORGE_VERSION=newmain_newforge
+ARG TORCH_VERSION=2.6.0
+ARG APP_USER=runpod
+ARG APP_UID=1000
+ARG APP_GID=1000
 
-# Step 2: Install system dependencies, including python3.12 from deadsnakes PPA
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PYTHON_VERSION=${PYTHON_VERSION} \
-    PYTORCH_VERSION=${PYTORCH_VERSION} \
     XPU_TARGET=NVIDIA_GPU
 
-ENV VENV_DIR=/opt/venv
-ENV REFORGE_VENV=$VENV_DIR/stable-diffusion-webui
-ENV JUPYTER_VENV=$VENV_DIR/jupyter
-ENV PATH="$REFORGE_VENV/bin:$JUPYTER_VENV/bin:$PATH"
+ENV APP_USER=${APP_USER} \
+    APP_UID=${APP_UID} \
+    APP_GID=${APP_GID}
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    python${PYTHON_VERSION} \
-    python${PYTHON_VERSION}-venv \
-    python3-pip \ 
-    wget \
+ENV VENV_DIR=/opt/venv
+ENV REFORGE_VENV=/opt/venv/stable-diffusion-webui
+ENV JUPYTER_VENV=/opt/venv/jupyter
+ENV TORCH_VERSION=${TORCH_VERSION}
+ENV PATH="${REFORGE_VENV}/bin:${JUPYTER_VENV}/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
     ffmpeg \
+    git \
+    libgl1 \
+    libglib2.0-0 \
     libsm6 \
     libxext6 \
-    tree \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-venv \
+    sudo \
+    tzdata \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual envs
-RUN python${PYTHON_VERSION} -m venv $COMFYUI_VENV && \
-    python${PYTHON_VERSION} -m venv $JUPYTER_VENV
+RUN python${PYTHON_VERSION} -m ensurepip --upgrade && \
+    python${PYTHON_VERSION} -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+RUN ln -sf "/usr/bin/python${PYTHON_VERSION}" /usr/local/bin/python3 && \
+    ln -sf "/usr/bin/python${PYTHON_VERSION}" /usr/local/bin/python
+
+RUN python${PYTHON_VERSION} -m venv "${REFORGE_VENV}" && \
+    python${PYTHON_VERSION} -m venv "${JUPYTER_VENV}"
+
+RUN groupadd --gid "${APP_GID}" "${APP_USER}" && \
+    useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /bin/bash "${APP_USER}" && \
+    mkdir -p /workspace && \
+    chown -R "${APP_UID}:${APP_GID}" /workspace /opt/venv
 
 WORKDIR /workspace
 
-# Install JupyterLab in its own virtual environment
-RUN . $JUPYTER_VENV/bin/activate && \
-    pip install --no-cache-dir jupyterlab notebook numpy pandas && \
-    jupyter notebook --generate-config && \
-    echo "c.NotebookApp.token = ''" >> ~/.jupyter/jupyter_notebook_config.py && \
-    echo "c.NotebookApp.password = ''" >> ~/.jupyter/jupyter_notebook_config.py && \
-    deactivate
+RUN "${JUPYTER_VENV}/bin/pip" install --no-cache-dir jupyterlab notebook numpy pandas
 
-# Setup ReForge
-### Will this be an issue declaring it rather than git cloning it to create hte directory
+RUN git clone --depth 1 --branch "${REFORGE_VERSION}" \
+    https://github.com/Panchovix/stable-diffusion-webui-reForge.git \
+    /workspace/stable-diffusion-webui
+
+RUN chown -R "${APP_UID}:${APP_GID}" /workspace /opt/venv
+
 WORKDIR /workspace/stable-diffusion-webui
 
-RUN . $REFORGE_VENV/bin/activate && \
-    git clone https://github.com/Panchovix/stable-diffusion-webui-reForge.git --branch newmain_newforge /workspace/stable-diffusion-webui && \
-    cd /workspace/stable-diffusion-webui && \
-    if [ "$REFORGE_VERSION" != "newmain_newforge" ]; then git checkout $REFORGE_VERSION; fi && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -r requirements_versions.txt && \
-    pip install --no-cache-dir torch==${PYTORCH_VERSION} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 && \
-    deactivate
 
-# --- after cloning stable-diffusion-webui into /workspace/stable-diffusion-webui ---
+RUN printf '\n%s\n' \
+    'install_dir="/workspace"' \
+    'venv_dir="/opt/venv/stable-diffusion-webui"' \
+    'export COMMANDLINE_ARGS="--listen --host 0.0.0.0"' \
+    'export TORCH_COMMAND="pip install torch=='"${TORCH_VERSION}"' --extra-index-url https://download.pytorch.org/whl/cu124"' \
+    'export REQS_FILE="requirements_versions.txt"' \
+    >> /workspace/stable-diffusion-webui/webui-user.sh
 
-# Make these args/envs exist at build time (ARG) and runtime (ENV) as you prefer
-ARG TORCH_VERSION=2.6.0
-ENV TORCH_VERSION=${TORCH_VERSION}
-
-# Example: if you want this provided by Runpod at runtime, keep it as ENV only.
-# If you know it at build time, use ARG + ENV similarly.
-ENV REFORGE_VENV="venv"
-
-RUN set -eux; \
-  f="/workspace/stable-diffusion-webui/webui-user.sh"; \
-  test -f "$f"; \
-  sed -i -E 's|^[[:space:]]*#?[[:space:]]*export[[:space:]]+COMMANDLINE_ARGS=.*|export COMMANDLINE_ARGS="--listen --host 0.0.0.0"|' "$f"
-  \
-  # 1) install_dir="/workspace" (uncomment or replace any existing install_dir= line)
-  sed -i -E 's|^[[:space:]]*#?[[:space:]]*install_dir=.*|install_dir="/workspace"|' "$f"; \
-  \
-  # 2) venv_dir="$REFORGE_VENV" (uncomment or replace)
-  sed -i -E 's|^[[:space:]]*#?[[:space:]]*venv_dir=.*|venv_dir="'"$REFORGE_VENV"'"|' "$f"; \
-  \
-  # 3) export TORCH_COMMAND=... (uncomment or replace)
-  sed -i -E 's|^[[:space:]]*#?[[:space:]]*export[[:space:]]+TORCH_COMMAND=.*|export TORCH_COMMAND="pip install torch=='"$TORCH_VERSION"' --extra-index-url https://download.pytorch.org/whl/cu130"|' "$f"; \
-  \
-  # 4) export REQS_FILE="requirements_versions.txt" (uncomment or replace)
-  sed -i -E 's|^[[:space:]]*#?[[:space:]]*export[[:space:]]+REQS_FILE=.*|export REQS_FILE="requirements_versions.txt"|' "$f"; \
-  \
-  # show the final relevant lines for build logs
-  grep -nE '^(install_dir=|venv_dir=|export TORCH_COMMAND=|export REQS_FILE=)' "$f"
-
-# Create a startup script 
 COPY <<'EOF' /start.sh
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 umask 002
 
-echo "Starting ReForge Setup..."
-echo "Python Version: $(python3 --version)"
+APP_USER="${APP_USER:-runpod}"
+APP_UID="${APP_UID:-1000}"
 
-# Check GPU Availability
-if command -v nvidia-smi &> /dev/null; then
-    echo "NVIDIA GPU Detected"
-    echo "CUDA Version $(nvcc --version 2>/dev/null || echo 'NVCC not found')"
-    echo "GPU Information: $(nvidia-smi)"
+# Some runtimes force UID 0 at startup. Re-exec as app user so webui.sh doesn't abort.
+if [ "$(id -u)" -eq 0 ] && [ "${1:-}" != "--as-user" ]; then
+    if ! id -u "${APP_USER}" >/dev/null 2>&1; then
+        useradd --uid "${APP_UID}" --create-home --shell /bin/bash "${APP_USER}" || true
+    fi
+    chown -R "${APP_USER}:${APP_USER}" /workspace /opt/venv
+    exec sudo -E -H -u "${APP_USER}" /start.sh --as-user
+fi
+
+echo "Starting ReForge setup"
+echo "Python: $("${REFORGE_VENV}/bin/python" --version)"
+
+if command -v nvidia-smi >/dev/null 2>&1; then
     export XPU_TARGET=NVIDIA_GPU
 elif [ -d "/dev/dri" ]; then
-    echo "AMD GPU detected"
     export XPU_TARGET=AMD_GPU
 else
-    echo "No GPU Detected, using CPU"
     export XPU_TARGET=CPU
 fi
 
-# Start JupyterLab
-echo "Starting JupyterLab..."
-. $JUPYTER_VENV/bin/activate
-jupyter lab --ip 0.0.0.0 --port 8888 --no-browser --allow-root & 
-deactivate
+"${JUPYTER_VENV}/bin/jupyter" lab --ip 0.0.0.0 --port 8888 --no-browser &
 
-echo "Starting Reforge"
-. $REFORGE_VENV/bin/activate
-exec webui.sh
+cd /workspace/stable-diffusion-webui
+exec ./webui.sh
 EOF
 
 RUN chmod +x /start.sh
 
-# Step 6: Expose the Web UI Port
+RUN chown "${APP_UID}:${APP_GID}" /start.sh
+
 EXPOSE 7860 8888
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:7860 || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:7860/ || exit 1
 
-CMD "/start..sh"
+USER ${APP_UID}:${APP_GID}
+
+CMD ["/start.sh"]
